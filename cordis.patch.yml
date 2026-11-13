@@ -1,0 +1,8 @@
+# dsh bundle patch: mounts the FigGenie skill provider and its preview routes.
+# `root` is the workspace the preview panel scans for .svg figures; it also
+# bounds every /dsh-figgenie/* request, so the panel cannot read outside it.
+# Leave it unset to use the host's working directory (the open workspace), or
+# pin it to an absolute path from the plugin's config page.
+- insert:
+    - id: dsh-figgenie-paper-diagram:skill
+      name: 'dsh-figgenie-paper-diagram'

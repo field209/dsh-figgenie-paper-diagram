@@ -1,0 +1,3 @@
+# keep every byte as authored: the skill assets were checked out with CRLF
+# and the SVGs/palettes are compared byte-for-byte by the packaging scripts
+* -text

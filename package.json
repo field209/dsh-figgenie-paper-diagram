@@ -1,0 +1,50 @@
+{
+  "name": "dsh-figgenie-paper-diagram",
+  "version": "1.7.3",
+  "description": "FigGenie 论文插图技能 + 预览图侧栏：按顶会风格手绘 SVG（架构图、机制图、Figure 1），在右侧栏渲染预览、运行排版检查、导出 PDF 与可编辑 draw.io。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "license": "MIT",
+  "author": "Sleepy Avacado (skill) / packaged for DSH",
+  "icon": "icon.svg",
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "skill",
+    "svg",
+    "paper-figure",
+    "diagram",
+    "preview",
+    "drawio"
+  ],
+  "files": [
+    "lib",
+    "client",
+    "assets",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ],
+      "platform": "web"
+    }
+  }
+}
