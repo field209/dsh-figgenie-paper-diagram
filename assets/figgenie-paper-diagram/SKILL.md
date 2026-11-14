@@ -172,7 +172,8 @@ exemplars is a normal outcome.** The paper's own content and material come befor
   --tags … --objects … --text …` with the words of the brief ranks the 3,210 cards (336 with a deep record, 638 rated
   good, the rest); choose 9–12 by meaning (mostly tier 1, at least one from another field, different solutions), `sheet`
   them into a numbered picture, show it, and **ask the user to pick two to four** ("you choose" and "more like 5" are
-  answers too); then `files`, LOOK at each `print.webp`, read its `source.svg` and the tier-1 lessons
+  answers too); then `files`, LOOK at each thumbnail (`print.webp`, or `preview.png` when the build ships
+  no webp), read its `source.svg` and the tier-1 lessons
   (`references/ai/exemplar-retrieval.md`). The picks are a strong preference about look and feel: say so in the plan.
   **Gate: the user picks.** For a whole-model figure, `references/ai/model-architectures.md` names 16 model types' drawings.
 - **Arrangement, palette, encoding (step 3).** No template: `references/ai/layouts.md` §1 (panels in a row or grid,
@@ -298,7 +299,8 @@ schematics 4); 53 % hold pictures, 54 % icons, 25 % bubbles, 50 % formulas; pane
   `style-thresholds.json`, `anti-patterns`, `exemplar-retrieval`, `model-architectures`); `references/styles/` named styles.
 - `assets/exemplars/` — systems: 485 published figures (339 architecture across the 20 templates, 146 mechanism across
   the 5 groups), each under `figures/<id>/` with a one-line lesson in its `index.json`; `styles/` the named styles'
-  figures; `ai/` the AI family: 3,210 cards (`cards.jsonl`), 792 full packs (`figures/<id>/print.webp`, `source.svg`,
+  figures; `ai/` the AI family: 3,210 cards (`cards.jsonl`), 792 full packs (`figures/<id>/source.svg`, a `print.webp`
+  thumbnail where the build ships one, plus
   `semantics.json` for the 336 deep records), thumbnails, `vocab.json`, `SOURCES.md`. Style reference only; provenance in
   every manifest.
 - `assets/symbols/` — 3,851 parts, standalone SVGs in pt with `data-symbol`: 592 for systems architecture figures, 2,261

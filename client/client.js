@@ -2222,6 +2222,8 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false);
       const [editing, setEditing] = useState(false);
       const [stamp, setStamp] = useState(Date.now());
+      const [importing, setImporting] = useState(false);
+      const fileRef = useRef(null);
 
       const load = useCallback(async () => {
         setState((previous) => ({ ...previous, status: 'loading', error: null }));
@@ -2272,6 +2274,40 @@ window.__ModuleLoader__.load({
         }
       }, [selected]);
 
+      /** Open a figure that lives outside the workspace. */
+      const pickFile = useCallback(() => {
+        if (fileRef.current !== null) {
+          fileRef.current.value = '';
+          fileRef.current.click();
+        }
+      }, []);
+
+      const onFilePicked = useCallback(async (event) => {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+        setImporting(true);
+        setState((previous) => ({ ...previous, error: null }));
+        try {
+          const text = await file.text();
+          if (!text.includes('<svg')) {
+            throw new Error('这个文件里没有 <svg>，请选一张 SVG 图。');
+          }
+          const saved = await postJSON(API + '/import', { name: file.name, svg: text });
+          const data = await getJSON(API + '/list');
+          setState({ status: 'ready', root: data.root || '', figures: data.figures || [], error: null });
+          setSelected(saved.path);
+          setEditing(true);
+        } catch (error) {
+          setState((previous) => ({
+            ...previous,
+            status: previous.figures.length > 0 ? previous.status : 'ready',
+            error: String(error && error.message ? error.message : error),
+          }));
+        } finally {
+          setImporting(false);
+        }
+      }, []);
+
       if (editing && selected !== null) {
         return h(Editor, {
           path: selected,
@@ -2284,9 +2320,22 @@ window.__ModuleLoader__.load({
       const current = figures.find((figure) => figure.path === selected) || null;
 
       return h('div', { style: styles.root },
+        h('input', {
+          ref: fileRef,
+          type: 'file',
+          accept: '.svg,image/svg+xml',
+          style: { display: 'none' },
+          onChange: onFilePicked,
+        }),
         h('div', { style: styles.row },
           h('strong', null, TAB_TITLE),
           h('button', { style: styles.button, onClick: load, title: '重新扫描工作区' }, '刷新'),
+          h('button', {
+            style: styles.button,
+            onClick: pickFile,
+            disabled: importing,
+            title: '从电脑里选一张 SVG 打开（会复制到工作区 figures/imported/）',
+          }, importing ? '读取…' : '打开文件'),
           h('span', { style: { flex: '1 1 auto' } }),
           h('button', {
             style: styles.primary,

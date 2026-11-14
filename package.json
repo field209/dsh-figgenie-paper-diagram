@@ -1,6 +1,6 @@
 {
   "name": "dsh-figgenie-paper-diagram",
-  "version": "1.7.3",
+  "version": "1.7.6",
   "description": "FigGenie 论文插图技能 + 预览图侧栏：按顶会风格手绘 SVG（架构图、机制图、Figure 1），在右侧栏渲染预览、运行排版检查、导出 PDF 与可编辑 draw.io。",
   "type": "module",
   "main": "lib/index.js",
