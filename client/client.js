@@ -289,13 +289,30 @@ window.__ModuleLoader__.load({
         overflow: 'auto',
       },
       canvas: {
+        display: 'flex',
+        justifyContent: 'center',
+        padding: '4px 0',
+      },
+      stage: {
+        position: 'relative',
+        overflow: 'auto',
+        width: '100%',
+        maxWidth: '58vh',
+        aspectRatio: '1 / 1',
         border: '1px solid rgba(127,127,127,.28)',
         borderRadius: '6px',
-        background: '#fff',
-        overflow: 'auto',
-        maxHeight: '58vh',
-        position: 'relative',
+        background: 'rgba(127,127,127,.06)',
         outline: 'none',
+      },
+      stageInner: {
+        boxSizing: 'border-box',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 'max-content',
+        minWidth: '100%',
+        minHeight: '100%',
+        padding: '12px',
       },
       img: { maxWidth: '100%', height: 'auto', display: 'block' },
       error: { color: '#e05252', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
@@ -1157,6 +1174,10 @@ window.__ModuleLoader__.load({
       ['se', 1, 1], ['s', 0.5, 1], ['sw', 0, 1], ['w', 0, 0.5],
     ];
 
+    /** Zoom limits shared by the buttons and the wheel. */
+    const clampZoom = (value) => Math.min(8, Math.max(0.2, value));
+    const trimZoom = (value) => String(Math.round(value * 100) / 100);
+
     function Editor({ path, onClose, onSaved }) {
       const [model, setModel] = useState(null);
       const [error, setError] = useState(null);
@@ -1172,13 +1193,53 @@ window.__ModuleLoader__.load({
       const [recent, setRecent] = useState([]);
 
       const svgRef = useRef(null);
+      const stageRef = useRef(null);
       const modelRef = useRef(null);
       const zoomRef = useRef(zoom);
+      const zoomAnchor = useRef(null);
       const dragRef = useRef(null);
       const historyRef = useRef({ stack: [], index: -1 });
 
       useEffect(() => { modelRef.current = model; }, [model]);
       useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+
+      /**
+       * Wheel zoom keeps the point under the cursor still: remember where that
+       * point sits inside the scrolling stage, then restore it after the size
+       * change lands.
+       */
+      useEffect(() => {
+        const stage = stageRef.current;
+        if (!stage) return undefined;
+        const onWheel = (event) => {
+          if (event.ctrlKey && event.deltaY === 0) return;
+          event.preventDefault();
+          const factor = Math.exp(-event.deltaY * (event.shiftKey ? 0.0004 : 0.0015));
+          const next = clampZoom(zoomRef.current * factor);
+          if (Math.abs(next - zoomRef.current) < 0.002) return;
+          const box = stage.getBoundingClientRect();
+          zoomAnchor.current = {
+            x: event.clientX - box.left + stage.scrollLeft,
+            y: event.clientY - box.top + stage.scrollTop,
+            cursorX: event.clientX - box.left,
+            cursorY: event.clientY - box.top,
+            zoom: zoomRef.current,
+          };
+          setZoom(next);
+        };
+        stage.addEventListener('wheel', onWheel, { passive: false });
+        return () => stage.removeEventListener('wheel', onWheel);
+      }, [model]);
+
+      useEffect(() => {
+        const stage = stageRef.current;
+        const anchor = zoomAnchor.current;
+        if (!stage || !anchor) return;
+        zoomAnchor.current = null;
+        const ratio = zoom / anchor.zoom;
+        stage.scrollLeft = anchor.x * ratio - anchor.cursorX;
+        stage.scrollTop = anchor.y * ratio - anchor.cursorY;
+      }, [zoom]);
 
       /** Colours already used by the figure — the quickest palette to reuse. */
       const extracted = useMemo(() => {
@@ -2181,7 +2242,9 @@ window.__ModuleLoader__.load({
             h('span', null, '吸管：点击画布任意位置取色'),
             h('button', { style: styles.small, onClick: () => setEyedropper(null) }, '取消'))
           : null,
-        h('div', { style: styles.canvas }, canvas),
+        h('div', { style: styles.canvas },
+          h('div', { ref: stageRef, style: styles.stage },
+            h('div', { style: styles.stageInner }, canvas))),
         h('div', { style: styles.row },
           h('span', { style: styles.label }, '画布'),
           sizeInput('w', '宽'),
@@ -2192,9 +2255,14 @@ window.__ModuleLoader__.load({
           h('button', { style: styles.small, onClick: centerCanvas, title: '把图形挪到画布正中' }, '居中'),
           h('span', { style: { flex: '1 1 auto' } }),
           h('span', { style: styles.label }, '缩放'),
-          h('button', { style: styles.small, onClick: () => setZoom((z) => Math.max(0.5, Math.round((z - 0.5) * 10) / 10)) }, '－'),
-          h('span', { style: styles.meta }, zoom.toFixed(1) + '×'),
-          h('button', { style: styles.small, onClick: () => setZoom((z) => Math.min(6, Math.round((z + 0.5) * 10) / 10)) }, '＋'),
+          h('button', {
+            style: styles.small,
+            onClick: () => setZoom((z) => clampZoom(Math.round((z - 0.25) * 100) / 100)),
+            title: '滚轮也能缩放，以鼠标位置为中心',
+          }, '－'),
+          h('span', { style: styles.meta, title: '滚轮缩放，按住 Shift 微调' }, trimZoom(zoom) + '×'),
+          h('button', { style: styles.small, onClick: () => setZoom((z) => clampZoom(Math.round((z + 0.25) * 100) / 100)) }, '＋'),
+          h('button', { style: styles.small, onClick: () => setZoom(2), title: '回到 2×' }, '复位'),
         ),
         h('div', { style: styles.row },
           h('span', { style: { flex: '1 1 auto' } }),
