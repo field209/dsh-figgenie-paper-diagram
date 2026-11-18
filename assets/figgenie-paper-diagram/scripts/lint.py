@@ -474,7 +474,10 @@ class Lint:
                         self.add('warn', 'edge.endpoint', f'{gid} {end} should touch {want} but is {dist_to_box(p, wb):.1f} pt away', [gid, f'n:{want}'])
             has_head = any(e.get('markerEnd') or e.get('markerStart') for e in lines) or any(e['tag'] in ('path', 'polygon') and e['fill'] not in ('none', 'rgba(0, 0, 0, 0)') and e['w'] < 12 and e['h'] < 12 for e in self.children.get(gid, []))
             se = spec_edges.get(gid)
-            if not has_head and (se is None or se.get('head', 'filled') != 'none'):
+            # `data-arrow="none"` is the author saying so on purpose: UML
+            # associations, actor-to-use-case links and plain connectors.
+            intentional = g['attrs'].get('data-arrow') == 'none'
+            if not has_head and not intentional and (se is None or se.get('head', 'filled') != 'none'):
                 self.add('warn', 'edge.nohead', f'{gid} has no arrowhead (marker-end or a small filled triangle)', [gid])
             # crossing boxes it does not connect
             for nid, b in nb.items():
@@ -675,8 +678,11 @@ class Lint:
                         self.add('warn', 'edge.head-overlap', f'{name} of {gid} overlaps {who} at ({hit[0]:.0f},{hit[1]:.0f}); move that rule or the box row so the head clears it', [gid, ln.get('parentGroup')], bb)
                         break
             tails = ([('tail', pts[0])] if not main.get('markerStart') else []) + ([('end', pts[-1])] if not main.get('markerEnd') else [])
+            # Several connectors leaving the same actor/box is a fan, not a slip.
+            fan = {ln.get('parentGroup') for ln in others if self.by_kind.get('edge', {}).get(ln.get('parentGroup') or '', {}).get('attrs', {}).get('data-from') == frm}
             for name, p in tails:
                 for ln in others:
+                    if ln.get('parentGroup') in fan: continue
                     dmin = min(math.hypot(q[0] - p[0], q[1] - p[1]) for q in ln['points'])
                     if dmin <= tail_clear:
                         who = ln.get('parentGroup') or ln.get('id') or 'a line'

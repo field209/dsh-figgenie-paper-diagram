@@ -418,6 +418,31 @@ window.__ModuleLoader__.load({
       return [cx, cy];
     }
 
+    /** Shapes whose edge should meet the outline, not the bounding box corner. */
+    const RIM_KINDS = new Set(['ellipse', 'circle', 'umlUseCase', 'diamond']);
+
+    /**
+     * Where a connector should meet `node` when it heads toward `other`: on the
+     * ellipse/diamond outline, so a use-case fan looks like it lands on the oval.
+     */
+    function rimAnchor(node, other) {
+      const cx = node.x + node.w / 2;
+      const cy = node.y + node.h / 2;
+      const ox = other.x + other.w / 2;
+      const oy = other.y + other.h / 2;
+      if (Math.abs(ox - cx) < 0.01 && Math.abs(oy - cy) < 0.01) return [cx, cy];
+      const angle = Math.atan2(oy - cy, ox - cx);
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      const rx = node.w / 2;
+      const ry = node.h / 2;
+      if (node.kind === 'diamond') {
+        const scale = 1 / (Math.abs(cos) / rx + Math.abs(sin) / ry);
+        return [cx + cos * scale, cy + sin * scale];
+      }
+      return [cx + cos * rx, cy + sin * ry];
+    }
+
     function anchor(node, port) {
       const centre = [node.x + node.w / 2, node.y + node.h / 2];
       return rotatePoint(baseAnchor(node, port), centre, node.rot);
@@ -453,8 +478,12 @@ window.__ModuleLoader__.load({
       }
       if (!edge.from.port) edge.from.port = nearestPort(from, anchor(to, 'l'));
       if (!edge.to.port) edge.to.port = nearestPort(to, anchor(from, 'r'));
-      const a = anchor(from, edge.from.port);
-      const b = anchor(to, edge.to.port);
+      const spin = (node, point) => {
+        if (!node.rot) return point;
+        return rotatePoint(point, [node.x + node.w / 2, node.y + node.h / 2], node.rot);
+      };
+      const a = spin(from, RIM_KINDS.has(from.kind) ? rimAnchor(from, to) : baseAnchor(from, edge.from.port));
+      const b = spin(to, RIM_KINDS.has(to.kind) ? rimAnchor(to, from) : baseAnchor(to, edge.to.port));
       const route = edge.route || 'elbow';
       if (route === 'straight') {
         return { points: [a, b], d: 'M' + num(a[0]) + ',' + num(a[1]) + ' L' + num(b[0]) + ',' + num(b[1]) };
@@ -576,6 +605,23 @@ window.__ModuleLoader__.load({
       { id: 'curve', label: '曲线' },
     ];
 
+    /**
+     * Stand-alone line objects. A line is not a node: it has two points, a
+     * stroke, a dash pattern and arrow heads, so it can be dragged as a whole
+     * without pretending to be a box.
+     */
+    const LINES = [
+      { id: 'line', label: '直线', dash: '', arrow: 'none' },
+      { id: 'line-dashed', label: '虚线', dash: '3 2', arrow: 'none' },
+      { id: 'line-dotted', label: '点线', dash: '1 2', arrow: 'none' },
+      { id: 'arrow', label: '箭头', dash: '', arrow: 'end' },
+      { id: 'arrow-dashed', label: '虚线箭头', dash: '3 2', arrow: 'end' },
+      { id: 'arrow-double', label: '双向箭头', dash: '', arrow: 'both' },
+      { id: 'arrow-double-dashed', label: '双向虚线', dash: '3 2', arrow: 'both' },
+    ];
+
+    const LINE_GROUP = '线条';
+
     function polyline(points, close) {
       return 'M' + points.map((p) => num(p[0]) + ',' + num(p[1])).join(' L') + (close ? ' z' : '');
     }
@@ -596,6 +642,13 @@ window.__ModuleLoader__.load({
 
     /** Where a node's label sits: compartments and actors need their own spot. */
     function textLayout(node) {
+      const spot = baseTextLayout(node);
+      const dx = Number(node.labelDx) || 0;
+      const dy = Number(node.labelDy) || 0;
+      return dx === 0 && dy === 0 ? spot : { x: spot.x + dx, y: spot.y + dy, anchor: spot.anchor };
+    }
+
+    function baseTextLayout(node) {
       const cx = node.x + node.w / 2;
       const baseline = node.y + node.h / 2 + node.fs * 0.264;
       if (node.container) return { x: cx, y: node.y + node.fs * 1.35, anchor: 'middle' };
@@ -904,15 +957,19 @@ window.__ModuleLoader__.load({
     /** Serialise the model back into the house SVG dialect. */
     function svgFromModel(model) {
       const markers = new Map();
-      const markerFor = (edge) => {
-        const kind = edge.arrowKind || 'block';
-        if (edge.arrow === 'none' || kind === 'none') return null;
-        const key = edge.stroke + '|' + kind;
-        if (!markers.has(key)) markers.set(key, { id: 'arw' + (markers.size + 1), stroke: edge.stroke, kind });
+      const markerId = (stroke, kind) => {
+        if (!kind || kind === 'none') return null;
+        const key = stroke + '|' + kind;
+        if (!markers.has(key)) markers.set(key, { id: 'arw' + (markers.size + 1), stroke, kind });
         return markers.get(key).id;
       };
-      for (const edge of model.edges) markerFor(edge);
-      const idFor = (edge) => markerFor(edge);
+      for (const edge of model.edges) {
+        if (edge.arrow !== 'none') markerId(edge.stroke, edge.arrowKind || 'block');
+      }
+      for (const line of model.lines ?? []) {
+        if (line.arrow && line.arrow !== 'none') markerId(line.stroke || INK, line.arrowKind || 'block');
+      }
+      const idFor = (edge) => markerId(edge.stroke, edge.arrowKind || 'block');
       const lines = [];
       lines.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + num(model.w) + ' ' + num(model.h)
         + '" width="' + num(model.w) + 'pt" height="' + num(model.h) + 'pt"\n     font-family="' + FONT + '">');
@@ -925,12 +982,30 @@ window.__ModuleLoader__.load({
       }
       lines.push('  </defs>');
       lines.push('  <rect x="0" y="0" width="' + num(model.w) + '" height="' + num(model.h) + '" fill="' + (model.background ?? '#ffffff') + '"/>');
+      // Free segments (fishbone spine and bones, calipers, brackets): drawn
+      // under the labels and never attached to two nodes.
+      for (const line of model.lines ?? []) {
+        const dash = line.dash ? ' stroke-dasharray="' + line.dash + '"' : '';
+        const d = 'M' + line.points.map((p) => num(p[0]) + ',' + num(p[1])).join(' L');
+        const arrow = line.arrow || 'none';
+        const marker = arrow === 'none' ? null : markerId(line.stroke || INK, line.arrowKind || 'block');
+        const startMarker = marker && (arrow === 'start' || arrow === 'both') ? ' marker-start="url(#' + marker + ')"' : '';
+        const endMarker = marker && (arrow === 'end' || arrow === 'both') ? ' marker-end="url(#' + marker + ')"' : '';
+        lines.push('  <g id="l:' + line.id + '" data-line="1" data-arrow="' + arrow
+          + '" data-arrow-kind="' + (line.arrowKind || 'block') + '">');
+        lines.push('    <path d="' + d + '" fill="none" stroke="' + (line.stroke || INK)
+          + '" stroke-width="' + num(line.sw ?? 0.9) + '"' + dash + startMarker + endMarker + '/>');
+        lines.push('  </g>');
+      }
       for (const node of model.nodes) {
         const box = num(node.x) + ',' + num(node.y) + ',' + num(node.w) + ',' + num(node.h);
         const prefix = node.container ? 'c:' : 'n:';
         const kind = node.container ? 'container' : 'node';
+        const offset = (Number(node.labelDx) || 0) !== 0 || (Number(node.labelDy) || 0) !== 0
+          ? ' data-label-offset="' + num(Number(node.labelDx) || 0) + ' ' + num(Number(node.labelDy) || 0) + '"'
+          : '';
         lines.push('  <g id="' + prefix + node.id + '" data-kind="' + kind + '" data-shape="' + node.kind
-          + '" data-box="' + box + '"' + rotationOf(node) + '>');
+          + '" data-box="' + box + '"' + offset + rotationOf(node) + '>');
         lines.push('    ' + nodeShapeSvg(node));
         const text = nodeTextSvg(node);
         if (text !== '') lines.push('    ' + text);
@@ -959,6 +1034,164 @@ window.__ModuleLoader__.load({
       }
       lines.push('</svg>');
       return lines.join('\n') + '\n';
+    }
+
+    /* ------------------------------------------------------------ fishbone */
+
+    /** Parse "类别: 原因1, 原因2" lines into fishbone categories. */
+    function parseFishboneSpec(text) {
+      const lines = String(text ?? '').split(/\r?\n/);
+      const categories = [];
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (line === '' || line.startsWith('#')) continue;
+        const cut = line.search(/[:：]/);
+        const name = (cut === -1 ? line : line.slice(0, cut)).trim();
+        if (name === '') continue;
+        const rest = cut === -1 ? '' : line.slice(cut + 1);
+        const causes = rest.split(/[,，;；]/).map((item) => item.trim()).filter((item) => item !== '');
+        categories.push({ name, causes });
+      }
+      return categories;
+    }
+
+    /**
+     * A cause-effect (Ishikawa) diagram: a spine that runs into the effect box,
+     * one diagonal bone per category, and short ticks for each cause. Bones are
+     * free segments, so the labels stay ordinary text nodes the canvas can drag.
+     */
+    function buildFishbone({ effect, categories, accent, width: fixedWidth }) {
+      const colour = accent || '#c0392b';
+      const cats = (categories && categories.length ? categories : [{ name: '类别', causes: [] }]).slice(0, 10);
+      const categoryFont = 7.4;
+      const causeFont = 6.8;
+      const depth = cats.reduce((most, cat) => Math.max(most, cat.causes.length), 0);
+      const sideSpan = Math.max(44, 22 + depth * 21);
+      const headW = Math.max(96, measureLabel(effect, 7.6, true) + 22);
+      const headH = 34;
+      const originX = 30;
+      // Keep the plate inside the double-column band papers use, then let the
+      // bones get steeper rather than letting the canvas grow past it. A caller
+      // that inserts into an existing figure can hand in a width instead.
+      const natural = Math.max(430, Math.min(603, 30 + cats.length * 74 + 34 + headW + 18));
+      const width = fixedWidth ? Math.max(240, Math.round(fixedWidth)) : natural;
+      const spineLen = Math.max(110, width - 30 - 34 - headW - 18);
+      const half = Math.max(34, sideSpan * 0.62);
+      const height = Math.max(150, sideSpan * 2 + 56);
+      const spineY = 0;
+      const spineEnd = originX + spineLen;
+
+      const nodes = [];
+      const lines = [];
+      let counter = 0;
+      const nextId = (prefix) => prefix + (counter += 1);
+
+      const textNode = (label, x, y, size, bold, colourOf) => {
+        const w = measureLabel(label, size, bold) + 2;
+        const h = size * 1.5;
+        nodes.push({
+          id: nextId('t'),
+          kind: 'text',
+          x: x - w / 2,
+          y: y - h * 0.62,
+          w,
+          h,
+          label,
+          fs: size,
+          fill: 'none',
+          stroke: 'none',
+          sw: 0,
+          dash: '',
+          color: colourOf || INK,
+          bold: Boolean(bold),
+          italic: false,
+          rot: 0,
+        });
+        return { w, h };
+      };
+
+      lines.push({ id: nextId('l'), points: [[originX, spineY], [spineEnd, spineY]], stroke: INK, sw: 1.2, dash: '' });
+
+      const upper = Math.ceil(cats.length / 2);
+      cats.forEach((cat, index) => {
+        const top = index < upper;
+        const slot = top ? index : index - upper;
+        const slots = top ? upper : cats.length - upper;
+        const attach = originX + 22 + (spineLen - 44) * ((slot + 0.5) / slots);
+        const dir = top ? -1 : 1;
+        const boneEndX = attach - half;
+        const boneEndY = spineY + dir * sideSpan;
+        lines.push({
+          id: nextId('l'),
+          points: [[attach, spineY], [boneEndX, boneEndY]],
+          stroke: colour,
+          sw: 1.05,
+          dash: '',
+        });
+        // the category sits just past the tip of its bone, clear of the ticks
+        textNode(cat.name, boneEndX - 2, boneEndY + dir * 10, categoryFont, true, colour);
+        const boneDx = boneEndX - attach;
+        const boneDy = boneEndY - spineY;
+        cat.causes.forEach((cause, position) => {
+          const count = cat.causes.length;
+          const t = count === 1 ? 0.55 : 0.3 + 0.48 * (position / (count - 1));
+          const px = attach + boneDx * t;
+          const py = spineY + boneDy * t;
+          lines.push({
+            id: nextId('l'),
+            points: [[px, py], [px - 14, py]],
+            stroke: MUTED,
+            sw: 0.7,
+            dash: '',
+          });
+          // The label sits level with its tick and clear of it: right edge a
+          // few points left of the tick's outer end, so the tick never runs
+          // through the words and the pair still reads as one unit.
+          textNode(cause, px - 18 - measureLabel(cause, causeFont, false) / 2, py, causeFont, false, MUTED);
+        });
+      });
+
+      nodes.push({
+        id: nextId('n'),
+        kind: 'term',
+        x: spineEnd + 16,
+        y: spineY - headH / 2,
+        w: headW,
+        h: headH,
+        label: effect,
+        fill: '#fdf3ef',
+        stroke: colour,
+        sw: 1.2,
+        dash: '',
+        fs: 7.6,
+        color: INK,
+        bold: true,
+        italic: false,
+        rot: 0,
+      });
+
+      // Shift everything so the drawing starts at the margin: fishbone math is
+      // centred on y = 0, while the canvas needs a positive box.
+      const box = { width: Number(width.toFixed(2)), height: Number((Math.max(height, depth * 21 + 74)).toFixed(2)) };
+      const dy = box.height / 2;
+      const dx = 6;
+      for (const node of nodes) {
+        node.x = Number((node.x + dx).toFixed(2));
+        node.y = Number((node.y + dy).toFixed(2));
+      }
+      for (const line of lines) {
+        line.points = line.points.map((p) => [Number((p[0] + dx).toFixed(2)), Number((p[1] + dy).toFixed(2))]);
+      }
+
+      return {
+        v: 1,
+        w: box.width,
+        h: box.height,
+        background: '#ffffff',
+        nodes,
+        edges: [],
+        lines,
+      };
     }
 
     /* ------------------------------------------------------------ svg input */
@@ -1017,6 +1250,7 @@ window.__ModuleLoader__.load({
         background: '#ffffff',
         nodes: [],
         edges: [],
+        lines: [],
       };
       const attr = (el, name, fallback) => {
         const value = el.getAttribute(name);
@@ -1035,6 +1269,31 @@ window.__ModuleLoader__.load({
         const text = Array.from(group.children).find((child) => child.tagName.toLowerCase() === 'text');
         if (!shape) continue;
         const tag = shape.tagName.toLowerCase();
+        const isConnector = group.getAttribute('data-from') !== null && group.getAttribute('data-to') !== null;
+        // A stroked, unfilled path with no endpoints and no label is a free
+        // segment (fishbone bone, tick, divider) rather than a shape.
+        const looksLikeLine = !isConnector
+          && (tag === 'line' || (tag === 'path' && attr(shape, 'fill', 'none') === 'none'))
+          && text === undefined;
+        if (group.getAttribute('data-line') !== null || looksLikeLine) {
+          const points = tag === 'line'
+            ? [[numAttr(shape, 'x1', 0), numAttr(shape, 'y1', 0)], [numAttr(shape, 'x2', 0), numAttr(shape, 'y2', 0)]]
+            : parsePoints(attr(shape, 'd', 'M0,0 L0,0'));
+          if (points.length >= 2) {
+            const startHead = attr(shape, 'marker-start', '') !== '';
+            const endHead = attr(shape, 'marker-end', '') !== '';
+            model.lines.push({
+              id: id.replace(/^l:/, '') || 'l' + (model.lines.length + 1),
+              points,
+              stroke: attr(shape, 'stroke', INK),
+              sw: numAttr(shape, 'stroke-width', 0.9),
+              dash: attr(shape, 'stroke-dasharray', ''),
+              arrow: attr(group, 'data-arrow', startHead && endHead ? 'both' : (endHead ? 'end' : (startHead ? 'start' : 'none'))),
+              arrowKind: (attr(group, 'data-arrow', 'none') === 'none') ? '' : attr(group, 'data-arrow-kind', 'block'),
+            });
+            continue;
+          }
+        }
         if (group.getAttribute('data-from') !== null && group.getAttribute('data-to') !== null) {
           const points = parsePoints(attr(shape, 'd', 'M0,0 L0,0'));
           model.edges.push({
@@ -1138,6 +1397,11 @@ window.__ModuleLoader__.load({
           if (declared && SHAPES.some((entry) => entry.id === declared)) node.kind = declared;
           const turned = /rotate\(\s*(-?[\d.]+)/.exec(group.getAttribute('transform') || '');
           node.rot = turned ? Number(turned[1]) : 0;
+          const offset = (group.getAttribute('data-label-offset') || '').split(/[\s,]+/).map(Number);
+          if (offset.length === 2 && offset.every((value) => Number.isFinite(value))) {
+            node.labelDx = offset[0];
+            node.labelDy = offset[1];
+          }
           model.nodes.push(node);
         }
       }
@@ -1163,7 +1427,11 @@ window.__ModuleLoader__.load({
         context.font = (bold ? '600 ' : '') + size * 4 + 'px ' + FONT;
         return context.measureText(text).width / 4;
       } catch {
-        return text.length * size * 0.55;
+        // No canvas (headless test harness): count wide glyphs — CJK and
+        // full-width punctuation sit on a 1em square, not on 0.55em.
+        let units = 0;
+        for (const ch of text) units += /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uff60]/.test(ch) ? 1 : 0.55;
+        return units * size;
       }
     }
 
@@ -1191,9 +1459,14 @@ window.__ModuleLoader__.load({
       const [colourOpen, setColourOpen] = useState(null);
       const [eyedropper, setEyedropper] = useState(null);
       const [recent, setRecent] = useState([]);
+      const [fbOpen, setFbOpen] = useState(false);
+      const [fbEffect, setFbEffect] = useState('结论不可复现');
+      const [fbSpec, setFbSpec] = useState(DEFAULT_FISHBONE_SPEC);
 
       const svgRef = useRef(null);
       const stageRef = useRef(null);
+      const labelInputRef = useRef(null);
+      const [focusLabel, setFocusLabel] = useState(null);
       const modelRef = useRef(null);
       const zoomRef = useRef(zoom);
       const zoomAnchor = useRef(null);
@@ -1202,6 +1475,17 @@ window.__ModuleLoader__.load({
 
       useEffect(() => { modelRef.current = model; }, [model]);
       useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+
+      // Double-clicking a shape jumps into its text field instead of hunting for it.
+      useEffect(() => {
+        if (focusLabel === null) return;
+        const field = labelInputRef.current;
+        if (field) {
+          field.focus();
+          field.select();
+        }
+        setFocusLabel(null);
+      }, [focusLabel]);
 
       /**
        * Wheel zoom keeps the point under the cursor still: remember where that
@@ -1414,6 +1698,24 @@ window.__ModuleLoader__.load({
             target.x = Math.max(0, Math.min(next.w - target.w, snappedX));
             target.y = Math.max(0, Math.min(next.h - target.h, snappedY));
             setModel(next);
+          } else if (drag.mode === 'move-line') {
+            const next = clone(current);
+            const target = (next.lines ?? []).find((line) => line.id === drag.id);
+            if (!target) return;
+            const dx = point[0] - drag.origin[0];
+            const dy = point[1] - drag.origin[1];
+            target.points = drag.points.map(([x, y]) => [
+              Math.round((x + dx) * 10) / 10,
+              Math.round((y + dy) * 10) / 10,
+            ]);
+            setModel(next);
+          } else if (drag.mode === 'move-label') {
+            const next = clone(current);
+            const target = next.nodes.find((n) => n.id === drag.id);
+            if (!target) return;
+            target.labelDx = Math.round((drag.dx + point[0] - drag.origin[0]) * 10) / 10;
+            target.labelDy = Math.round((drag.dy + point[1] - drag.origin[1]) * 10) / 10;
+            setModel(next);
           } else if (drag.mode === 'resize') {
             const next = clone(current);
             const target = next.nodes.find((n) => n.id === drag.id);
@@ -1456,6 +1758,26 @@ window.__ModuleLoader__.load({
               next.preview = { from: drag.from, to: point };
               return next;
             });
+          } else if (drag.mode === 'draw-line') {
+            setModel((previous) => {
+              if (!previous) return previous;
+              const next = clone(previous);
+              const [sx, sy] = drag.start;
+              let ex = point[0];
+              let ey = point[1];
+              if (event.shiftKey) {
+                // Shift locks the segment to the dominant axis.
+                if (Math.abs(ex - sx) >= Math.abs(ey - sy)) ey = sy;
+                else ex = sx;
+              }
+              next.previewLine = {
+                points: [[sx, sy], [ex, ey]],
+                dash: drag.variant.dash,
+                arrow: drag.variant.arrow,
+                arrowKind: 'block',
+              };
+              return next;
+            });
           }
         };
         const up = (event) => {
@@ -1489,9 +1811,33 @@ window.__ModuleLoader__.load({
             }
             return;
           }
+          if (drag.mode === 'draw-line') {
+            const next = clone(current);
+            const previewLine = next.previewLine;
+            delete next.previewLine;
+            const [a, b] = previewLine ? previewLine.points : [null, null];
+            if (a && b && Math.hypot(b[0] - a[0], b[1] - a[1]) >= 6) {
+              if (!Array.isArray(next.lines)) next.lines = [];
+              const id = uid(next, 'l');
+              next.lines.push({
+                id,
+                points: [a, b].map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]),
+                stroke: INK,
+                sw: 0.9,
+                dash: previewLine.dash,
+                arrow: previewLine.arrow,
+                arrowKind: 'block',
+              });
+              commit(next);
+              setSelected({ type: 'line', id });
+              setTool('select');
+            } else {
+              setModel(next);
+            }
+            return;
+          }
           const before = JSON.stringify(drag.before);
-          if (before !== JSON.stringify(current)) commit(current);
-        };
+          if (before !== JSON.stringify(current)) commit(current);        };
         window.addEventListener('pointermove', move);
         window.addEventListener('pointerup', up);
         return () => {
@@ -1510,6 +1856,35 @@ window.__ModuleLoader__.load({
           origin: pointOf(event),
           x: node.x,
           y: node.y,
+          before: clone(modelRef.current),
+        };
+      }, [pointOf, tool]);
+
+      /** Drag a label away from its shape: the text moves, the box stays. */
+      const startMoveLabel = useCallback((event, node) => {
+        if (tool !== 'select') return;
+        event.stopPropagation();
+        setSelected({ type: 'node', id: node.id });
+        dragRef.current = {
+          mode: 'move-label',
+          id: node.id,
+          origin: pointOf(event),
+          dx: Number(node.labelDx) || 0,
+          dy: Number(node.labelDy) || 0,
+          before: clone(modelRef.current),
+        };
+      }, [pointOf, tool]);
+
+      /** A free segment (fishbone spine, bone, caliper) drags as a whole. */
+      const startMoveLine = useCallback((event, line) => {
+        if (tool !== 'select') return;
+        event.stopPropagation();
+        setSelected({ type: 'line', id: line.id });
+        dragRef.current = {
+          mode: 'move-line',
+          id: line.id,
+          origin: pointOf(event),
+          points: line.points.map((point) => [point[0], point[1]]),
           before: clone(modelRef.current),
         };
       }, [pointOf, tool]);
@@ -1589,6 +1964,67 @@ window.__ModuleLoader__.load({
         setTool('select');
       }, [commit]);
 
+      /**
+       * Insert a fishbone into the figure being edited — the same builder the
+       * panel uses, but dropped below the existing content and merged into the
+       * model, so its bones and labels are ordinary editable objects.
+       */
+      const insertFishbone = useCallback(() => {
+        const current = modelRef.current;
+        if (!current) return;
+        const categories = parseFishboneSpec(fbSpec);
+        if (!categories.length) {
+          setMessage('没有解析到类别，格式是「类别: 原因1, 原因2」');
+          return;
+        }
+        const built = buildFishbone({
+          effect: fbEffect.trim() || '结果',
+          categories,
+          width: Math.max(240, Math.min(current.w - 24, 640)),
+        });
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (const node of built.nodes) {
+          minX = Math.min(minX, node.x);
+          minY = Math.min(minY, node.y);
+          maxY = Math.max(maxY, node.y + node.h);
+        }
+        for (const line of built.lines) {
+          for (const [x, y] of line.points) {
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxY = Math.max(maxY, y);
+          }
+        }
+        const bottoms = current.nodes.map((node) => node.y + node.h);
+        for (const line of current.lines ?? []) for (const [, y] of line.points) bottoms.push(y);
+        const top = bottoms.length
+          ? Math.max(...bottoms) + 18
+          : Math.max(12, (current.h - built.h) / 2);
+        const dx = 12 - minX;
+        const dy = top - minY;
+        const next = clone(current);
+        next.lines = next.lines ?? [];
+        const round = (value) => Math.round(value * 10) / 10;
+        for (const node of built.nodes) {
+          next.nodes.push({ ...node, id: uid(next, 'n'), x: round(node.x + dx), y: round(node.y + dy) });
+        }
+        for (const line of built.lines) {
+          next.lines.push({
+            ...line,
+            id: uid(next, 'l'),
+            points: line.points.map(([x, y]) => [round(x + dx), round(y + dy)]),
+          });
+        }
+        next.h = Math.max(next.h, Math.ceil(top + built.h + 12));
+        next.w = Math.max(next.w, Math.ceil(24 + built.w));
+        commit(next);
+        setSelected(null);
+        setFbOpen(false);
+        setMessage('鱼骨图已插入，骨头和标签都可以直接拖。');
+      }, [commit, fbEffect, fbSpec]);
+
       const removeSelected = useCallback(() => {
         const current = modelRef.current;
         if (!current || selected === null) return;
@@ -1596,6 +2032,8 @@ window.__ModuleLoader__.load({
         if (selected.type === 'node') {
           next.nodes = next.nodes.filter((n) => n.id !== selected.id);
           next.edges = next.edges.filter((e) => e.from.id !== selected.id && e.to.id !== selected.id);
+        } else if (selected.type === 'line') {
+          next.lines = (next.lines ?? []).filter((l) => l.id !== selected.id);
         } else {
           next.edges = next.edges.filter((e) => e.id !== selected.id);
         }
@@ -1607,7 +2045,8 @@ window.__ModuleLoader__.load({
         const current = modelRef.current;
         if (!current || selected === null) return;
         const next = clone(current);
-        const collection = selected.type === 'node' ? next.nodes : next.edges;
+        const collection = selected.type === 'node' ? next.nodes
+          : selected.type === 'line' ? (next.lines ?? []) : next.edges;
         const target = collection.find((entry) => entry.id === selected.id);
         if (!target) return;
         Object.assign(target, patch);
@@ -1686,6 +2125,7 @@ window.__ModuleLoader__.load({
 
       const selectedNode = selected && selected.type === 'node' ? model.nodes.find((n) => n.id === selected.id) : null;
       const selectedEdge = selected && selected.type === 'edge' ? model.edges.find((e) => e.id === selected.id) : null;
+      const selectedLine = selected && selected.type === 'line' ? (model.lines ?? []).find((l) => l.id === selected.id) : null;
       const scale = zoom;
       const handleSize = 6 / scale;
       const portRadius = 3.2 / scale;
@@ -1735,16 +2175,22 @@ window.__ModuleLoader__.load({
 
       // One marker per (colour, head shape) pair actually used.
       const edMarkers = new Map();
+      const registerMarker = (stroke, kind) => {
+        if (!stroke || !kind || kind === 'none') return;
+        const key = stroke + '|' + kind;
+        if (!edMarkers.has(key)) edMarkers.set(key, { id: 'ed' + (edMarkers.size + 1), stroke, kind });
+      };
       for (const edge of model.edges) {
-        const kind = edge.arrowKind || 'block';
-        if (edge.arrow === 'none' || kind === 'none') continue;
-        const key = edge.stroke + '|' + kind;
-        if (!edMarkers.has(key)) edMarkers.set(key, { id: 'ed' + (edMarkers.size + 1), stroke: edge.stroke, kind });
+        if (edge.arrow !== 'none') registerMarker(edge.stroke, edge.arrowKind || 'block');
       }
-      const markerForEdge = (edge) => {
-        const entry = edMarkers.get(edge.stroke + '|' + (edge.arrowKind || 'block'));
+      for (const line of model.lines ?? []) {
+        if (line.arrow && line.arrow !== 'none') registerMarker(line.stroke || INK, line.arrowKind || 'block');
+      }
+      const markerFor = (stroke, kind) => {
+        const entry = edMarkers.get(stroke + '|' + (kind || 'block'));
         return entry ? 'url(#' + entry.id + ')' : undefined;
       };
+      const markerForEdge = (edge) => markerFor(edge.stroke, edge.arrowKind);
       const headBody = (marker) => {
         if (marker.kind === 'open') {
           return h('path', { d: 'M0,1 L10,5 L0,9', fill: 'none', stroke: marker.stroke, strokeWidth: 1.5, strokeLinecap: 'round' });
@@ -1772,6 +2218,18 @@ window.__ModuleLoader__.load({
         onPointerDown: (event) => {
           if (eyedropper) { sampleColour(event); return; }
           if (tool === 'select') { setSelected(null); return; }
+          if (tool.startsWith('draw:')) {
+            const variant = LINES.find((entry) => 'draw:' + entry.id === tool);
+            if (variant) {
+              dragRef.current = {
+                mode: 'draw-line',
+                variant,
+                start: pointOf(event),
+                before: clone(modelRef.current),
+              };
+            }
+            return;
+          }
           addNode(tool, pointOf(event));
         },
       },
@@ -1788,15 +2246,70 @@ window.__ModuleLoader__.load({
           markerWidth: 4.6, markerHeight: 4.6, orient: 'auto-start-reverse',
         }, h('path', { d: 'M0,1 L10,5 L0,9 z', fill: 'rgba(64,132,255,.9)' })),
       ),
+      (model.lines ?? []).map((line) => {
+        const d = 'M' + line.points.map((p) => num(p[0]) + ',' + num(p[1])).join(' L');
+        const active = selected !== null && selected.type === 'line' && selected.id === line.id;
+        const head = line.arrow || 'none';
+        const marker = head === 'none' ? undefined : markerFor(line.stroke || INK, line.arrowKind || 'block');
+        return h('g', { key: 'l:' + line.id },
+          h('path', {
+            d,
+            fill: 'none',
+            stroke: line.stroke || INK,
+            strokeWidth: line.sw ?? 0.9,
+            strokeDasharray: line.dash || undefined,
+            strokeLinecap: 'round',
+            markerStart: head === 'start' || head === 'both' ? marker : undefined,
+            markerEnd: head === 'end' || head === 'both' ? marker : undefined,
+            pointerEvents: 'none',
+          }),
+          active
+            ? h('path', {
+              d, fill: 'none', stroke: 'rgba(64,132,255,.85)',
+              strokeWidth: (line.sw ?? 0.9) + 2 / scale,
+              strokeDasharray: '3 2', pointerEvents: 'none',
+            })
+            : null,
+          h('path', {
+            d,
+            fill: 'none',
+            stroke: 'transparent',
+            strokeWidth: Math.max(7 / scale, (line.sw ?? 0.9) + 4 / scale),
+            strokeLinecap: 'round',
+            style: { cursor: tool === 'select' ? 'move' : 'crosshair' },
+            onPointerDown: (event) => startMoveLine(event, line),
+          }));
+      }),
+      model.previewLine
+        ? h('path', {
+          key: 'preview-line',
+          d: 'M' + model.previewLine.points.map((p) => num(p[0]) + ',' + num(p[1])).join(' L'),
+          fill: 'none',
+          stroke: 'rgba(64,132,255,.85)',
+          strokeWidth: 0.9,
+          strokeDasharray: model.previewLine.dash || '3 2',
+          pointerEvents: 'none',
+        })
+        : null,
       model.nodes.map((node) => h('g', {
         key: node.id,
         opacity: 1,
         transform: node.rot ? 'rotate(' + node.rot + ' ' + (node.x + node.w / 2) + ' ' + (node.y + node.h / 2) + ')' : undefined,
+        onDoubleClick: (event) => {
+          event.stopPropagation();
+          setSelected({ type: 'node', id: node.id });
+          setFocusLabel(node.id);
+        },
       },
         shapeFor(node),
         node.label !== ''
           ? (() => {
             const spot = textLayout(node);
+            // A pure text object is dragged by its glyphs; any other label can be
+            // dragged once its shape is selected, which moves the text off the box.
+            const bare = node.kind === 'text';
+            const selectedHere = selected !== null && selected.type === 'node' && selected.id === node.id;
+            const grab = bare || selectedHere;
             return h('text', {
               x: spot.x,
               y: spot.y,
@@ -1805,8 +2318,11 @@ window.__ModuleLoader__.load({
               fill: node.color,
               fontWeight: node.bold ? 600 : 400,
               fontStyle: node.italic ? 'italic' : 'normal',
-              pointerEvents: 'none',
-              style: { fontFamily: FONT },
+              pointerEvents: grab ? 'auto' : 'none',
+              onPointerDown: grab
+                ? (event) => (bare ? startMove(event, node) : startMoveLabel(event, node))
+                : undefined,
+              style: { fontFamily: FONT, cursor: grab && tool === 'select' ? 'move' : undefined },
             }, node.label);
           })()
           : null,
@@ -1936,10 +2452,16 @@ window.__ModuleLoader__.load({
           h('div', { style: styles.row },
             h('span', { style: styles.label }, '文字'),
             h('input', {
+              ref: labelInputRef,
               style: styles.field,
               value: selectedNode.label,
               onChange: (event) => patchSelected({ label: event.target.value }),
             }),
+            h('button', {
+              style: styles.small,
+              title: '把文字挪回图形中间',
+              onClick: () => patchSelected({ labelDx: 0, labelDy: 0 }),
+            }, '文字复位'),
           ),
           h('div', { style: styles.row },
             h('span', { style: styles.label }, '字号'),
@@ -2155,7 +2677,67 @@ window.__ModuleLoader__.load({
               }),
             ),
           )
-          : h('div', { style: styles.meta }, '点选一个方框或连线来改样式；从选中框四周的蓝点拖出可以拉一条新连线。');
+          : selectedLine
+            ? h('div', { style: styles.root },
+              h('div', { style: styles.row },
+                h('span', { style: styles.label }, '线段'),
+                h('span', { style: styles.meta }, '从 ('
+                  + num(selectedLine.points[0][0]) + ', ' + num(selectedLine.points[0][1]) + ') 到 ('
+                  + num(selectedLine.points[1][0]) + ', ' + num(selectedLine.points[1][1]) + ')'),
+                h('span', { style: { flex: '1 1 auto' } }),
+                h('button', { style: styles.button, onClick: removeSelected }, '删除'),
+              ),
+              h(ColorRow, {
+                label: '颜色',
+                value: selectedLine.stroke || INK,
+                onChange: (colour) => { rememberColour(colour); patchSelected({ stroke: colour }); },
+                open: colourOpen === 'line',
+                onToggle: () => setColourOpen(colourOpen === 'line' ? null : 'line'),
+                recent,
+                extracted,
+                extra: [h('button', {
+                  style: eyedropper === 'line' ? styles.primary : styles.button,
+                  title: '从画布上取色',
+                  onClick: () => setEyedropper(eyedropper === 'line' ? null : 'line'),
+                }, '吸管')],
+              }),
+              h('div', { style: styles.row },
+                h('span', { style: styles.label }, '线条'),
+                DASHES.map((entry) => h('button', {
+                  key: entry.id,
+                  title: entry.label,
+                  style: (selectedLine.dash || '') === entry.value ? styles.primary : styles.button,
+                  onClick: () => patchSelected({ dash: entry.value }),
+                }, entry.label)),
+                h('span', { style: styles.label }, '线宽'),
+                h('input', {
+                  style: { ...styles.field, width: '56px' },
+                  type: 'number', step: '0.1', min: '0',
+                  value: selectedLine.sw ?? 0.9,
+                  onChange: (event) => patchSelected({ sw: Number(event.target.value) || 0.5 }),
+                }),
+              ),
+              h('div', { style: styles.row },
+                h('span', { style: styles.label }, '箭头'),
+                h('select', {
+                  style: styles.field,
+                  value: selectedLine.arrow || 'none',
+                  onChange: (event) => patchSelected({ arrow: event.target.value }),
+                },
+                  h('option', { value: 'none' }, '无'),
+                  h('option', { value: 'end' }, '终点'),
+                  h('option', { value: 'start' }, '起点'),
+                  h('option', { value: 'both' }, '两端')),
+                h('span', { style: styles.label }, '样式'),
+                h('select', {
+                  style: styles.field,
+                  value: selectedLine.arrowKind || 'block',
+                  onChange: (event) => patchSelected({ arrowKind: event.target.value }),
+                }, ARROWS.map((entry) => h('option', { key: entry.id, value: entry.id }, entry.label))),
+              ),
+              h('div', { style: styles.meta }, '拖动这条线可以整体移动——鱼骨的脊线、斜骨和刻度都是这种线段。'),
+            )
+            : h('div', { style: styles.meta }, '点选一个方框或连线来改样式；从选中框四周的蓝点拖出可以拉一条新连线。');
 
       /** A 26×18 preview of a shape, used by the palette and the kind picker. */
       const shapeIcon = (kind) => {
@@ -2174,22 +2756,47 @@ window.__ModuleLoader__.load({
           })));
       };
 
-      const palette = SHAPE_GROUPS.map((group) => h('div', {
+      /** A 26×18 preview of a stand-alone line: dash pattern plus arrow heads. */
+      const lineIcon = (variant) => {
+        const ended = variant.arrow === 'end' || variant.arrow === 'both';
+        const started = variant.arrow === 'both';
+        return h('svg', { key: variant.id, width: 26, height: 18, viewBox: '0 0 26 18' },
+          h('path', {
+            d: 'M' + (started ? 6 : 3) + ',9 L' + (ended ? 20 : 23) + ',9',
+            fill: 'none', stroke: '#3a4658', strokeWidth: 1,
+            strokeDasharray: variant.dash || undefined,
+          }),
+          ended ? h('path', { d: 'M20,9 L16,6.6 L16,11.4 z', fill: '#3a4658' }) : null,
+          started ? h('path', { d: 'M6,9 L10,6.6 L10,11.4 z', fill: '#3a4658' }) : null);
+      };
+
+      const palette = [...SHAPE_GROUPS, LINE_GROUP].map((group) => h('div', {
         key: group,
         style: { display: 'flex', alignItems: 'flex-start', gap: '4px', marginBottom: '2px' },
       },
       h('span', { style: { ...styles.meta, width: '26px', flex: '0 0 auto', paddingTop: '3px' } }, group),
       h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '3px' } },
-        SHAPES.filter((shape) => shape.group === group).map((shape) => h('button', {
-          key: shape.id,
-          title: shape.label,
-          onClick: () => setTool(shape.id),
-          style: {
-            padding: '1px', lineHeight: 0, cursor: 'pointer', borderRadius: '3px',
-            background: tool === shape.id ? 'rgba(64,132,255,.16)' : 'transparent',
-            border: tool === shape.id ? '1px solid rgba(64,132,255,.85)' : '1px solid transparent',
-          },
-        }, shapeIcon(shape.id))))));
+        group === LINE_GROUP
+          ? LINES.map((variant) => h('button', {
+            key: variant.id,
+            title: variant.label + '：在画布上拖出长度',
+            onClick: () => setTool('draw:' + variant.id),
+            style: {
+              padding: '1px', lineHeight: 0, cursor: 'pointer', borderRadius: '3px',
+              background: tool === 'draw:' + variant.id ? 'rgba(64,132,255,.16)' : 'transparent',
+              border: tool === 'draw:' + variant.id ? '1px solid rgba(64,132,255,.85)' : '1px solid transparent',
+            },
+          }, lineIcon(variant)))
+          : SHAPES.filter((shape) => shape.group === group).map((shape) => h('button', {
+            key: shape.id,
+            title: shape.label,
+            onClick: () => setTool(shape.id),
+            style: {
+              padding: '1px', lineHeight: 0, cursor: 'pointer', borderRadius: '3px',
+              background: tool === shape.id ? 'rgba(64,132,255,.16)' : 'transparent',
+              border: tool === shape.id ? '1px solid rgba(64,132,255,.85)' : '1px solid transparent',
+            },
+          }, shapeIcon(shape.id))))));
 
 
       /** A pt field that only commits on blur or Enter, so typing is not undoable noise. */
@@ -2231,12 +2838,34 @@ window.__ModuleLoader__.load({
             onClick: () => setTool('select'),
           }, '选择'),
           h('span', { style: styles.meta }, '点图形后按 Delete 删除，拖蓝点连线'),
+          h('button', {
+            style: fbOpen ? styles.primary : styles.button,
+            title: '往这张图里插入一张鱼骨图（脊线、斜骨和刻度都是可拖动的线段）',
+            onClick: () => setFbOpen(!fbOpen),
+          }, '鱼骨图'),
           h('span', { style: { flex: '1 1 auto' } }),
           h('button', { style: styles.button, onClick: undo, title: 'Ctrl+Z' }, '↶'),
           h('button', { style: styles.button, onClick: redo, title: 'Ctrl+Shift+Z' }, '↷'),
           h('button', { style: styles.button, onClick: removeSelected, disabled: selected === null }, '删除'),
         ),
         h('div', { style: { padding: '2px 0 4px' } }, palette),
+        fbOpen
+          ? h('div', { style: { ...styles.row, alignItems: 'flex-start', flexWrap: 'wrap', gap: '6px', background: 'rgba(64,132,255,.10)', borderRadius: '6px', padding: '6px 8px' } },
+            h('span', { style: styles.label }, '结果'),
+            h('input', {
+              style: { ...styles.field, width: '180px' },
+              value: fbEffect,
+              onChange: (event) => setFbEffect(event.target.value),
+            }),
+            h('textarea', {
+              style: { ...styles.field, width: '100%', minHeight: '84px', fontFamily: 'inherit', fontSize: '12px' },
+              value: fbSpec,
+              onChange: (event) => setFbSpec(event.target.value),
+            }),
+            h('button', { style: styles.primary, onClick: insertFishbone }, '插入到这张图'),
+            h('button', { style: styles.button, onClick: () => setFbSpec(DEFAULT_FISHBONE_SPEC) }, '恢复 6M 示例'),
+            h('span', { style: styles.meta }, '每行「类别: 原因1, 原因2」，插到现有内容下方，之后当普通图形改。'))
+          : null,
         eyedropper
           ? h('div', { style: { ...styles.row, background: 'rgba(64,132,255,.12)', borderRadius: '6px', padding: '4px 8px' } },
             h('span', null, '吸管：点击画布任意位置取色'),
@@ -2282,9 +2911,46 @@ window.__ModuleLoader__.load({
 
     /* ------------------------------------------------------------ preview panel */
 
+    const DEFAULT_FISHBONE_SPEC = [
+      '人: 记录不完整, 复核缺失',
+      '机: 采集延迟, 资源争抢',
+      '料: 样本偏差, 标注漂移',
+      '法: 口径不一致, 步骤遗漏',
+      '测: 指标含糊, 阈值拍脑袋',
+      '环: 环境变化, 依赖升级',
+    ].join('\n');
+
+    /**
+     * A render error inside the tab would otherwise leave an empty pane with no
+     * hint of what went wrong — show the message instead.
+     */
+    class PanelBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { error: null };
+        this.retry = () => this.setState({ error: null });
+      }
+
+      static getDerivedStateFromError(error) {
+        return { error };
+      }
+
+      render() {
+        if (this.state.error) {
+          const message = this.state.error && this.state.error.message
+            ? this.state.error.message
+            : String(this.state.error);
+          return h('div', { style: styles.root },
+            h('strong', null, '插图面板出错'),
+            h('div', { style: styles.error }, message),
+            h('button', { style: styles.button, onClick: this.retry }, '重试'));
+        }
+        return this.props.children;
+      }
+    }
+
     function Panel() {
-      const [state, setState] = useState({ status: 'loading', root: '', figures: [], error: null });
-      const [selected, setSelected] = useState(null);
+      const [state, setState] = useState({ status: 'loading', root: '', figures: [], error: null });      const [selected, setSelected] = useState(null);
       const [scale, setScale] = useState(3);
       const [check, setCheck] = useState({ status: 'idle', ok: null, findings: [], error: null });
       const [busy, setBusy] = useState(false);
@@ -2385,6 +3051,7 @@ window.__ModuleLoader__.load({
       }
 
       const figures = state.figures;
+
       const current = figures.find((figure) => figure.path === selected) || null;
 
       return h('div', { style: styles.root },
@@ -2499,7 +3166,7 @@ window.__ModuleLoader__.load({
             disposers.push(client.slots.inject('sidebar.right.pane.tab', () => client.slots.register({
               name: 'sidebar.right.pane.tab',
               key: TAB_ID,
-            }, () => h(Panel))));
+            }, () => h(PanelBoundary, null, h(Panel)))));
             disposers.push(client.slots.inject('sidebar.right.pane.tab.title', () => client.slots.register({
               name: 'sidebar.right.pane.tab.title',
               key: TAB_ID,
@@ -2523,7 +3190,7 @@ window.__ModuleLoader__.load({
       inject: ['slots'],
       apply,
       /** Exposed for the offline round-trip check; not part of the client API. */
-      __test: { svgFromModel, parseSvg, routeEdge, hexRgb, rgbHex, rgbHsv, hsvRgb },
+      __test: { svgFromModel, parseSvg, routeEdge, hexRgb, rgbHex, rgbHsv, hsvRgb, buildFishbone, parseFishboneSpec },
     };
   },
 });

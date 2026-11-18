@@ -194,6 +194,25 @@ exemplars is a normal outcome.** The paper's own content and material come befor
   loudest thing, is every code keyed, is every relation drawn, is a sample there where the kind has one, is any text
   block longer than three lines, are the large fields pale). All advisory.
 
+## Cause-effect (fishbone / Ishikawa) figures
+
+A fishbone is its own kind, not a flowchart: one horizontal spine ends in the effect, categories hang off it as straight
+bones at roughly 55–60°, and each cause is a short tick off its bone with a two-to-four-word label. Draw it with the
+paper's own categories — the 6M set (人 / 机 / 料 / 法 / 测 / 环, or People / Machine / Material / Method / Measurement /
+Environment) is a default, not a requirement, and a paper usually needs three to eight bones, three to five causes each.
+House rules that keep it readable at print size: the spine sits on the vertical centre of the plate; the effect goes in a
+rounded box whose text is bold; category names are bold and sit just past the tip of their bone, not on top of the ticks;
+causes stay in one language and one font size, never wrapping; the plate is 430–603 pt wide for a double-column venue and
+the bones get steeper rather than the plate growing past the band. Colour carries one meaning at most — a red spine and
+red category names for the causal skeleton, everything else ink — a rainbow of bones reads as decoration.
+
+In the sidebar, 「鱼骨图」 writes a starter directly: one line per category in the form `类别: 原因1, 原因2`, then the
+effect. The result is an ordinary editable figure — the bones are free segments (`<g id="l:…" data-line="1">`), so the
+labels are text nodes you can drag, retype, recolour and re-export to PDF or draw.io; rerun the generator when the
+structure (not the wording) changes. When the effect or the categories are Chinese, `lint.py` will warn that the shipped
+TeX Gyre Heros faces carry no CJK glyphs — that is honest: pick a face that has them, or accept the system fallback and
+say so in the caption, because a PDF preview will substitute a different font.
+
 ## Optional add-on after delivery: an editable PowerPoint copy
 
 Only when the user asks for a deck, or an editable / Word-native version of the figure. `python3 scripts/svg2pptx.py
