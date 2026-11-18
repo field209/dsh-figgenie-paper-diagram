@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.8.5
+
+- `package.json` 补上 `repository` / `homepage` / `bugs`。市场目录靠 npm 包里的 `repository` 把包和 GitHub 仓库对上，缺了它会被记成「没有 npm 版本」，只能按 git 安装。
+
 ## 1.8.4
 
 - 文字可以单独搬了：选中图形后直接拖它的标签就能把文字挪开，属性面板「文字复位」一键回中；纯文字对象点上去就能整块拖动。偏移随 `data-label-offset` 存进 SVG，导出的 PDF/draw.io 与画布一致。
