@@ -648,6 +648,72 @@ window.__ModuleLoader__.load({
       return dx === 0 && dy === 0 ? spot : { x: spot.x + dx, y: spot.y + dy, anchor: spot.anchor };
     }
 
+    const WIDE = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uff60]/;
+
+    /** Greedy line breaking: latin words stay whole, CJK breaks anywhere. */
+    function wrapParagraph(text, size, bold, maxWidth) {
+      const units = [];
+      let word = '';
+      for (const ch of text) {
+        if (WIDE.test(ch)) {
+          if (word) { units.push(word); word = ''; }
+          units.push(ch);
+        } else if (ch === ' ') {
+          if (word) { units.push(word); word = ''; }
+          units.push(' ');
+        } else {
+          word += ch;
+        }
+      }
+      if (word) units.push(word);
+      const lines = [];
+      let line = '';
+      for (const unit of units) {
+        if (line === '') {
+          line = unit === ' ' ? '' : unit;
+          continue;
+        }
+        if (measureLabel((line + unit).trimEnd(), size, bold) <= maxWidth) {
+          line += unit;
+          continue;
+        }
+        lines.push(line.trimEnd());
+        line = unit === ' ' ? '' : unit;
+      }
+      lines.push(line.trimEnd());
+      return lines;
+    }
+
+    /** The rendered lines of a label: paragraph boxes wrap, the rest do not. */
+    function textLines(node) {
+      const label = String(node.label ?? '');
+      if (!node.wrap) return label.split('\n');
+      const width = Math.max(8, node.w - 4);
+      const out = [];
+      for (const para of label.split('\n')) {
+        if (para === '') { out.push(''); continue; }
+        out.push(...wrapParagraph(para, node.fs, node.bold, width));
+      }
+      return out.length ? out : [''];
+    }
+
+    function lineHeightOf(node) {
+      return node.fs * (Number(node.lh) || 1.25);
+    }
+
+    function lineAnchorX(node) {
+      const align = node.align ?? 'center';
+      if (align === 'left') return node.x + 2;
+      if (align === 'right') return node.x + node.w - 2;
+      return node.x + node.w / 2;
+    }
+
+    function firstBaseline(node, count) {
+      const block = count * lineHeightOf(node);
+      const top = node.y + Math.max(0, (node.h - block) / 2);
+      return top + node.fs * 0.98;
+    }
+
     function baseTextLayout(node) {
       const cx = node.x + node.w / 2;
       const baseline = node.y + node.h / 2 + node.fs * 0.264;
@@ -940,10 +1006,16 @@ window.__ModuleLoader__.load({
       if (node.label === '') return '';
       const weight = node.bold ? ' font-weight="600"' : '';
       const italic = node.italic ? ' font-style="italic"' : '';
+      const lines = textLines(node);
+      const step = lineHeightOf(node);
       const spot = textLayout(node);
-      return '<text x="' + num(spot.x) + '" y="' + num(spot.y)
-        + '" font-size="' + num(node.fs) + '" text-anchor="' + spot.anchor + '" fill="' + node.color + '"' + weight + italic + '>'
-        + esc(node.label) + '</text>';
+      const wrapped = Boolean(node.wrap);
+      const anchor = wrapped ? ({ left: 'start', right: 'end' }[node.align ?? 'center'] ?? 'middle') : spot.anchor;
+      const x = wrapped ? lineAnchorX(node) : spot.x;
+      const top = wrapped ? firstBaseline(node, lines.length) : spot.y;
+      return lines.map((line, index) => '<text x="' + num(x) + '" y="' + num(top + index * step)
+        + '" font-size="' + num(node.fs) + '" text-anchor="' + anchor + '" fill="' + node.color + '"'
+        + weight + italic + '>' + esc(line) + '</text>').join('');
     }
 
     function rotationOf(node) {
@@ -1004,8 +1076,12 @@ window.__ModuleLoader__.load({
         const offset = (Number(node.labelDx) || 0) !== 0 || (Number(node.labelDy) || 0) !== 0
           ? ' data-label-offset="' + num(Number(node.labelDx) || 0) + ' ' + num(Number(node.labelDy) || 0) + '"'
           : '';
+        const para = node.wrap
+          ? ' data-wrap="1" data-align="' + (node.align ?? 'center') + '" data-lh="' + num(Number(node.lh) || 1.25)
+            + '" data-text="' + esc(node.label).replace(/\n/g, '&#10;') + '"'
+          : '';
         lines.push('  <g id="' + prefix + node.id + '" data-kind="' + kind + '" data-shape="' + node.kind
-          + '" data-box="' + box + '"' + offset + rotationOf(node) + '>');
+          + '" data-box="' + box + '"' + offset + para + rotationOf(node) + '>');
         lines.push('    ' + nodeShapeSvg(node));
         const text = nodeTextSvg(node);
         if (text !== '') lines.push('    ' + text);
@@ -1266,8 +1342,44 @@ window.__ModuleLoader__.load({
       for (const group of containers) {
         const id = attr(group, 'id', '');
         const shape = Array.from(group.children).find((child) => ['rect', 'ellipse', 'circle', 'path', 'line'].includes(child.tagName.toLowerCase()));
-        const text = Array.from(group.children).find((child) => child.tagName.toLowerCase() === 'text');
-        if (!shape) continue;
+        const texts = Array.from(group.children).filter((child) => child.tagName.toLowerCase() === 'text');
+        const text = texts[0];
+        const declaredKind = group.getAttribute('data-shape') || '';
+        const hiddenShape = shape !== undefined
+          && attr(shape, 'fill', 'none') === 'none' && attr(shape, 'stroke', 'none') === 'none';
+        if (declaredKind === 'text' || (hiddenShape && texts.length > 0)) {
+          // A paragraph or caption is all glyphs: the box it saves is a placeholder.
+          if (texts.length === 0) continue;
+          const box = (group.getAttribute('data-box') || '').split(/[\s,]+/).map(Number);
+          const first = texts[0];
+          const node = {
+            id: id.replace(/^[nc]:/, '') || 'n' + (model.nodes.length + 1),
+            container: false,
+            kind: 'text',
+            x: box.length === 4 ? box[0] : numAttr(first, 'x', 0),
+            y: box.length === 4 ? box[1] : numAttr(first, 'y', 0) - numAttr(first, 'font-size', 7),
+            w: box.length === 4 ? box[2] : Math.max(12, measureLabel(texts.map((el) => el.textContent ?? '').join(' '), numAttr(first, 'font-size', 7), attr(first, 'font-weight', '') !== '')),
+            h: box.length === 4 ? box[3] : numAttr(first, 'font-size', 7) * 1.4,
+            fill: 'none',
+            stroke: INK,
+            sw: 0.6,
+            dash: '',
+            label: group.hasAttribute('data-text')
+              ? group.getAttribute('data-text')
+              : texts.map((el) => el.textContent ?? '').join('\n'),
+            fs: numAttr(first, 'font-size', 7),
+            color: attr(first, 'fill', INK),
+            bold: attr(first, 'font-weight', '') !== '',
+            italic: attr(first, 'font-style', '') === 'italic',
+            wrap: attr(group, 'data-wrap', '') === '1',
+            align: attr(group, 'data-align', 'center'),
+            lh: numAttr(group, 'data-lh', 1.25),
+          };
+          const turned = /rotate\(\s*(-?[\d.]+)/.exec(group.getAttribute('transform') || '');
+          node.rot = turned ? Number(turned[1]) : 0;
+          model.nodes.push(node);
+          continue;
+        }
         const tag = shape.tagName.toLowerCase();
         const isConnector = group.getAttribute('data-from') !== null && group.getAttribute('data-to') !== null;
         // A stroked, unfilled path with no endpoints and no label is a free
@@ -1742,6 +1854,12 @@ window.__ModuleLoader__.load({
             target.y = y0;
             target.w = x1 - x0;
             target.h = y1 - y0;
+            if (target.kind === 'text' && !target.wrap && drag.h > 0) {
+              // a text object's size is its type size: dragging a corner scales it
+              const ratio = target.h / drag.h;
+              target.fs = Math.max(3, Math.min(48, Math.round((drag.fs ?? target.fs) * ratio * 10) / 10));
+              target.w = Math.max(12, Math.round(measureLabel(target.label, target.fs, target.bold) + 6));
+            }
             setModel(next);
           } else if (drag.mode === 'rotate') {
             const next = clone(current);
@@ -1900,6 +2018,7 @@ window.__ModuleLoader__.load({
           w: node.w,
           h: node.h,
           rot: Number(node.rot) || 0,
+          fs: node.fs,
           cx: node.x + node.w / 2,
           cy: node.y + node.h / 2,
           before: clone(modelRef.current),
@@ -1962,6 +2081,7 @@ window.__ModuleLoader__.load({
         commit(next);
         setSelected({ type: 'node', id: node.id });
         setTool('select');
+        if (kind === 'text') setFocusLabel(node.id);
       }, [commit]);
 
       /**
@@ -1969,6 +2089,39 @@ window.__ModuleLoader__.load({
        * panel uses, but dropped below the existing content and merged into the
        * model, so its bones and labels are ordinary editable objects.
        */
+      /** Drop a standalone text object in the middle of the canvas and start typing. */
+      const addText = useCallback(() => {
+        const current = modelRef.current;
+        if (!current) return;
+        const next = clone(current);
+        const node = {
+          id: uid(next, 'n'),
+          kind: 'text',
+          wrap: false,
+          align: 'center',
+          lh: 1.25,
+          x: Math.round(current.w / 2 - 40),
+          y: Math.round(current.h / 2 - 9),
+          w: 80,
+          h: 18,
+          rot: 0,
+          fill: 'none',
+          stroke: INK,
+          sw: 0.56,
+          dash: '',
+          label: '\u6587\u5b57',
+          fs: 8,
+          color: INK,
+          bold: false,
+          italic: false,
+        };
+        next.nodes.push(node);
+        commit(next);
+        setSelected({ type: 'node', id: node.id });
+        setFocusLabel(node.id);
+        setMessage('\u8f93\u5165\u6587\u5b57\uff0c\u56de\u8f66\u786e\u8ba4\uff1b\u62d6\u56db\u89d2\u6539\u5927\u5c0f\uff0c\u5b57\u53f7\u8ddf\u7740\u53d8\u3002');
+      }, [commit]);
+
       const insertFishbone = useCallback(() => {
         const current = modelRef.current;
         if (!current) return;
@@ -2051,7 +2204,13 @@ window.__ModuleLoader__.load({
         if (!target) return;
         Object.assign(target, patch);
         if (selected.type === 'node' && patch.label !== undefined) {
-          target.w = Math.max(target.w, Math.round(measureLabel(patch.label, target.fs, target.bold) + 14));
+          if (target.wrap) {
+            // wrapped text keeps the width the author gave it and grows in height
+            const count = textLines(target).length;
+            target.h = Math.max(target.h, Math.round(count * lineHeightOf(target) + 2));
+          } else {
+            target.w = Math.max(target.w, Math.round(measureLabel(patch.label, target.fs, target.bold) + 14));
+          }
         }
         commit(next);
       }, [commit, selected]);
@@ -2310,20 +2469,32 @@ window.__ModuleLoader__.load({
             const bare = node.kind === 'text';
             const selectedHere = selected !== null && selected.type === 'node' && selected.id === node.id;
             const grab = bare || selectedHere;
-            return h('text', {
-              x: spot.x,
-              y: spot.y,
-              fontSize: node.fs,
-              textAnchor: spot.anchor,
-              fill: node.color,
-              fontWeight: node.bold ? 600 : 400,
-              fontStyle: node.italic ? 'italic' : 'normal',
+            const lines = textLines(node);
+            const step = lineHeightOf(node);
+            const anchor = node.wrap
+              ? ({ left: 'start', right: 'end' }[node.align ?? 'center'] ?? 'middle')
+              : spot.anchor;
+            const x = node.wrap ? lineAnchorX(node) : spot.x;
+            const top = node.wrap ? firstBaseline(node, lines.length) : spot.y;
+            const handlers = {
               pointerEvents: grab ? 'auto' : 'none',
               onPointerDown: grab
                 ? (event) => (bare ? startMove(event, node) : startMoveLabel(event, node))
                 : undefined,
               style: { fontFamily: FONT, cursor: grab && tool === 'select' ? 'move' : undefined },
-            }, node.label);
+            };
+            return h('text', {
+              fill: node.color,
+              fontWeight: node.bold ? 600 : 400,
+              fontStyle: node.italic ? 'italic' : 'normal',
+              ...handlers,
+            }, lines.map((line, index) => h('tspan', {
+              key: index,
+              x,
+              y: top + index * step,
+              fontSize: node.fs,
+              textAnchor: anchor,
+            }, line)));
           })()
           : null,
       )),
@@ -2451,18 +2622,56 @@ window.__ModuleLoader__.load({
         ? h('div', { style: styles.root },
           h('div', { style: styles.row },
             h('span', { style: styles.label }, '文字'),
-            h('input', {
-              ref: labelInputRef,
-              style: styles.field,
-              value: selectedNode.label,
-              onChange: (event) => patchSelected({ label: event.target.value }),
-            }),
+            selectedNode.kind === 'text'
+              ? h('textarea', {
+                ref: labelInputRef,
+                style: { ...styles.field, minHeight: '46px', resize: 'vertical', fontFamily: FONT },
+                value: selectedNode.label,
+                onChange: (event) => patchSelected({ label: event.target.value }),
+              })
+              : h('input', {
+                ref: labelInputRef,
+                style: styles.field,
+                value: selectedNode.label,
+                onChange: (event) => patchSelected({ label: event.target.value }),
+              }),
             h('button', {
               style: styles.small,
               title: '把文字挪回图形中间',
               onClick: () => patchSelected({ labelDx: 0, labelDy: 0 }),
             }, '文字复位'),
           ),
+          selectedNode.kind === 'text'
+            ? h('div', { style: styles.row },
+              h('button', {
+                style: selectedNode.wrap ? styles.primary : styles.button,
+                title: '按框宽自动折行；拖四角改框，不改字号',
+                onClick: () => patchSelected({
+                  wrap: !selectedNode.wrap,
+                  h: Math.max(selectedNode.h, Math.round(selectedNode.fs * (selectedNode.lh ?? 1.25) * 1.4 + 2)),
+                }),
+              }, '自动换行'),
+              h('select', {
+                style: { ...styles.field, width: 'auto' },
+                value: selectedNode.align ?? 'center',
+                disabled: !selectedNode.wrap,
+                onChange: (event) => patchSelected({ align: event.target.value }),
+              },
+              h('option', { value: 'left' }, '左对齐'),
+              h('option', { value: 'center' }, '居中'),
+              h('option', { value: 'right' }, '右对齐'),
+              ),
+              h('span', { style: styles.label }, '行距'),
+              h('input', {
+                style: { ...styles.field, width: '56px' },
+                type: 'number', step: '0.05', min: '0.8', max: '3',
+                value: selectedNode.lh ?? 1.25,
+                onChange: (event) => patchSelected({
+                  lh: Math.max(0.8, Math.min(3, Number(event.target.value) || 1.25)),
+                }),
+              }),
+            )
+            : null,
           h('div', { style: styles.row },
             h('span', { style: styles.label }, '字号'),
             h('input', {
@@ -2838,6 +3047,11 @@ window.__ModuleLoader__.load({
             onClick: () => setTool('select'),
           }, '选择'),
           h('span', { style: styles.meta }, '点图形后按 Delete 删除，拖蓝点连线'),
+          h('button', {
+            style: styles.button,
+            title: '加一行独立文字：生成后直接打字，拖四角缩放字号',
+            onClick: addText,
+          }, '文字'),
           h('button', {
             style: fbOpen ? styles.primary : styles.button,
             title: '往这张图里插入一张鱼骨图（脊线、斜骨和刻度都是可拖动的线段）',

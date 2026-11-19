@@ -570,7 +570,7 @@ _MEASURE_JS = r"""
                  markerEnd: cs.markerEnd && cs.markerEnd !== 'none' ? cs.markerEnd : null, markerStart: cs.markerStart && cs.markerStart !== 'none' ? cs.markerStart : null,
                  dash: cs.strokeDasharray && cs.strokeDasharray !== 'none' ? cs.strokeDasharray : null,
                  parentGroup: null, attrs: {}};
-    for (const a of ['data-from','data-to','data-role','data-symbol','data-step','data-edge-kind','data-attached-to','data-anchor','data-order','data-panel','data-delta','data-at','data-replica','data-img','data-scale','data-label','data-box','data-shape','data-arrow','data-arrow-kind','data-route','preserveAspectRatio','transform','text-anchor','font-weight','x','y','width','height']) { const v = el.getAttribute(a); if (v !== null) rec.attrs[a] = v; }
+    for (const a of ['data-from','data-to','data-role','data-symbol','data-step','data-edge-kind','data-attached-to','data-anchor','data-order','data-panel','data-delta','data-at','data-replica','data-img','data-scale','data-label','data-box','data-shape','data-arrow','data-arrow-kind','data-route','data-wrap','data-align','data-lh','data-label-offset','preserveAspectRatio','transform','text-anchor','font-weight','x','y','width','height']) { const v = el.getAttribute(a); if (v !== null) rec.attrs[a] = v; }
     if (el.closest('[data-scale="data"]')) rec.scaleData = true;         // drawn to scale from data: no snapping advice
     if (tag === 'image') {
       try { const m = el.getCTM(); rec.img = {w: el.width.baseVal.value, h: el.height.baseVal.value, sx: Math.hypot(m.a, m.b), sy: Math.hypot(m.c, m.d)}; } catch (e) {}

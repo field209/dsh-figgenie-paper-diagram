@@ -442,6 +442,9 @@ class Lint:
                 if all(g > 0 for g in gaps) and max(gaps) - min(gaps) > 3.0 and max(gaps) < 60 and max(gaps) < 2 * min(gaps):
                     self.add('warn', 'align.gaps', f'uneven gaps {[round(g, 1) for g in gaps]} pt between {", ".join(run)}', run)
 
+    def node_attr(self, gid, name, fallback=None):
+        return (self.groups.get(gid, {}).get('attrs') or {}).get(name, fallback)
+
     def check_centre(self):
         for gid in self.by_kind.get('node', {}):
             sb = self.shape_of(gid); ts = [t for t in self.texts_of(gid) if not t.get('labelOutside')]
@@ -452,6 +455,8 @@ class Lint:
             tb = (min(b[0] for b in bs), min(b[1] for b in bs), max(b[2] for b in bs), max(b[3] for b in bs))
             tcx = (tb[0] + tb[2]) / 2; tcy = (tb[1] + tb[3]) / 2
             anchored_left = all((t.get('anchor') or 'start') == 'start' and abs(self.tbox(t)[0] - sb[0]) < 6 for t in ts)
+            aligned = self.node_attr(gid, 'data-align')       # a paragraph the author explicitly left/right aligned
+            if aligned in ('left', 'right'): anchored_left = True
             xtol = 1.2 if all(t.get('rotated') for t in ts) else 1.0      # across a turned label: same ink-band model and tolerance as centre.y
             if abs(tcx - cx) > xtol and not anchored_left: self.add('warn', 'centre.x', f'label of {gid} is {tcx - cx:+.1f} pt off the box centre horizontally', [gid], tb)
             if abs(tcy - cy) > 1.2 and len(ts) == 1 and sb[3] - sb[1] < 40: self.add('warn', 'centre.y', f'label of {gid} is {tcy - cy:+.1f} pt off the box centre vertically', [gid], tb)
